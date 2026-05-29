@@ -9,7 +9,7 @@ Equivalent to `ssh -N -D <local_port> user@host -p <port>` on desktop.
 1. Connects to an SSH server using JSch (mwiede fork).
 2. Starts a SOCKS5 proxy on the device (bound to `0.0.0.0:<local_port>`).
 3. Configures other apps (browser, etc.) to use `127.0.0.1:<local_port>` as a SOCKS5 proxy.
-4. All traffic is forwarded through the encrypted SSH tunnel.
+4. All traffic is forwarded through the encrypted SSH tunnel to internal network of the server.
 
 ## Features
 
