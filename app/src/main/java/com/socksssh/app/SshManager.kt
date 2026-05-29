@@ -102,7 +102,7 @@ class SshManager(
         }
 
         sess.connect(30000)
-        sess.setPortForwardingL(config.localPort)
+        sess.setPortForwardingL(config.localPort.toString())
 
         session = sess
     }

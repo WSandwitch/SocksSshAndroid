@@ -40,7 +40,7 @@ android {
     }
 
     composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.11"
+        kotlinCompilerExtensionVersion = "1.5.10"
     }
 }
 
@@ -54,5 +54,5 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
-    implementation("com.github.mwiede:jsch:2.16.0")
+    implementation("com.github.mwiede:jsch:0.2.16")
 }

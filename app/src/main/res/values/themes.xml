@@ -1,5 +1,5 @@
-<!-- Created by opencode on 2026-05-29 -->
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Created by opencode on 2026-05-29 -->
 <resources>
     <style name="Theme.SocksSsh" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">#FF1E1E1E</item>
