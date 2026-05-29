@@ -28,20 +28,20 @@ import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
 
-    private var sshService: SshService? = null
+    private val _sshService = mutableStateOf<SshService?>(null)
     private val prefs: PreferencesManager by lazy { PreferencesManager(this) }
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* granted or not, silently handled */ }
+    ) { }
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            sshService = (binder as SshService.LocalBinder).getService()
+            _sshService.value = (binder as SshService.LocalBinder).getService()
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
-            sshService = null
+            _sshService.value = null
         }
     }
 
@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     SocksSshApp(
-                        service = sshService,
+                        service = _sshService.value,
                         prefs = prefs,
                         context = this@MainActivity
                     )
@@ -97,9 +97,17 @@ fun SocksSshApp(
     context: Context
 ) {
     var config by remember { mutableStateOf(prefs.loadConfig()) }
-    val logs by service?.logs?.collectAsState() ?: remember { mutableStateOf(emptyList()) }
-    val connectionState by service?.connectionState?.collectAsState()
-        ?: remember { mutableStateOf(ConnectionState.DISCONNECTED) }
+
+    val logs by produceState<List<String>>(initialValue = emptyList(), key1 = service) {
+        service?.let { s -> s.logs.collect { value = it } }
+    }
+
+    val connectionState by produceState(
+        initialValue = ConnectionState.DISCONNECTED,
+        key1 = service
+    ) {
+        service?.let { s -> s.connectionState.collect { value = it } }
+    }
 
     val logScrollState = rememberScrollState()
 

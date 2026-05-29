@@ -1,12 +1,14 @@
 // Created by opencode on 2026-05-29
 package com.socksssh.app
 
+import com.jcraft.jsch.Channel
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
-import java.io.IOException
+import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.Proxy
+import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.Executors
 
 class SshManager(
     private val config: SshConfig,
@@ -14,6 +16,7 @@ class SshManager(
     private val onStateChange: (ConnectionState) -> Unit
 ) {
     private var session: Session? = null
+    private var socksProxy: Socks5Proxy? = null
     private var workerThread: Thread? = null
 
     @Volatile
@@ -27,8 +30,7 @@ class SshManager(
         onLog("Starting SSH connection to ${config.serverAddress}:${config.serverPort}...")
         workerThread = Thread {
             run()
-        }
-        workerThread?.apply {
+        }.apply {
             isDaemon = true
             name = "ssh-manager"
             start()
@@ -39,6 +41,8 @@ class SshManager(
         isRunning = false
         workerThread?.interrupt()
         workerThread = null
+        socksProxy?.stop()
+        socksProxy = null
         disconnect()
         onStateChange(ConnectionState.DISCONNECTED)
         onLog("Disconnected")
@@ -48,8 +52,10 @@ class SshManager(
         while (isRunning && !Thread.currentThread().isInterrupted) {
             try {
                 connect()
+                socksProxy = Socks5Proxy(session!!, config.localPort, onLog)
+                socksProxy!!.start()
                 onStateChange(ConnectionState.CONNECTED)
-                onLog("Connected. SOCKS5 proxy on ${config.localPort}")
+                onLog("Connected. SOCKS5 proxy on 0.0.0.0:${config.localPort}")
 
                 while (isRunning && !Thread.currentThread().isInterrupted) {
                     Thread.sleep(config.healthCheckPeriod * 1000L)
@@ -65,6 +71,8 @@ class SshManager(
             } catch (e: Exception) {
                 onLog(e.message ?: "Connection error")
             } finally {
+                socksProxy?.stop()
+                socksProxy = null
                 disconnect()
             }
 
@@ -102,8 +110,6 @@ class SshManager(
         }
 
         sess.connect(30000)
-        sess.setPortForwardingL(config.localPort.toString())
-
         session = sess
     }
 
@@ -117,7 +123,10 @@ class SshManager(
 
     private fun checkHealth(): Boolean {
         return try {
-            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", config.localPort))
+            val proxy = java.net.Proxy(
+                java.net.Proxy.Type.SOCKS,
+                InetSocketAddress("127.0.0.1", config.localPort)
+            )
             val socket = Socket(proxy)
             socket.connect(InetSocketAddress("1.1.1.1", 53), 5000)
             socket.close()
@@ -154,6 +163,109 @@ class SshManager(
             }
         }
         return map
+    }
+}
+
+internal class Socks5Proxy(
+    private val session: Session,
+    private val localPort: Int,
+    private val onLog: (String) -> Unit
+) {
+    private var serverSocket: ServerSocket? = null
+    private val executor = Executors.newCachedThreadPool()
+
+    fun start() {
+        serverSocket = ServerSocket().apply { bind(InetSocketAddress("0.0.0.0", localPort)) }
+        onLog("SOCKS5 listening on 0.0.0.0:$localPort")
+        executor.submit {
+            try {
+                while (!serverSocket!!.isClosed) {
+                    val client = serverSocket!!.accept()
+                    executor.submit { handleClient(client) }
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    fun stop() {
+        try {
+            serverSocket?.close()
+        } catch (_: Exception) {
+        }
+        executor.shutdownNow()
+    }
+
+    private fun handleClient(socket: Socket) {
+        try {
+            socket.soTimeout = 30000
+            val input = socket.getInputStream()
+            val output = socket.getOutputStream()
+
+            input.read()
+            val nMethods = input.read()
+            input.readNBytes(nMethods)
+            output.write(byteArrayOf(5, 0))
+
+            input.read()
+            val cmd = input.read()
+            input.read()
+
+            if (cmd != 1) {
+                output.write(buildSocks5Response(7))
+                socket.close()
+                return
+            }
+
+            val addrType = input.read()
+            val (host, port) = when (addrType) {
+                1 -> {
+                    val addr = input.readNBytes(4)
+                    InetAddress.getByAddress(addr).hostAddress to readShort(input)
+                }
+                3 -> {
+                    val len = input.read()
+                    String(input.readNBytes(len)) to readShort(input)
+                }
+                4 -> {
+                    val addr = input.readNBytes(16)
+                    InetAddress.getByAddress(addr).hostAddress to readShort(input)
+                }
+                else -> {
+                    output.write(buildSocks5Response(8))
+                    socket.close()
+                    return
+                }
+            }
+
+            val channel = session.getStreamForwarder(host, port) as Channel
+            channel.setInputStream(input)
+            channel.connect(30000)
+
+            output.write(buildSocks5Response(0))
+            output.flush()
+
+            channel.setOutputStream(output)
+
+            while (channel.isConnected && !socket.isClosed) {
+                Thread.sleep(500)
+            }
+        } catch (_: Exception) {
+        } finally {
+            try {
+                socket.close()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun readShort(input: java.io.InputStream): Int {
+        val b = input.readNBytes(2)
+        return (b[0].toInt() and 0xFF) shl 8 or (b[1].toInt() and 0xFF)
+    }
+
+    private fun buildSocks5Response(reply: Int): ByteArray {
+        return byteArrayOf(5, reply.toByte(), 0, 1, 0, 0, 0, 0, 0, 0)
     }
 }
 
