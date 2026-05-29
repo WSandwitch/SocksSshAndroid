@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SocksSSH</string>
+    <style name="Theme.SocksSsh" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#FF1E1E1E</item>
+    </style>
+</resources>

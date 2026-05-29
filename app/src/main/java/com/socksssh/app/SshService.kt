@@ -84,7 +84,11 @@ class SshService : Service() {
     }
 
     fun startSsh(config: SshConfig) {
-        _config.value = config
+        _config.value = config.copy(
+            localPort = if (config.localPort in 1..65535) config.localPort else 1080,
+            serverPort = if (config.serverPort in 1..65535) config.serverPort else 22,
+            healthCheckPeriod = if (config.healthCheckPeriod > 0) config.healthCheckPeriod else 30
+        )
         startForeground(NOTIFICATION_ID, createNotification("Connecting..."))
 
         sshManager?.stop()

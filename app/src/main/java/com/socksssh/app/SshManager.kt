@@ -52,10 +52,10 @@ class SshManager(
         while (isRunning && !Thread.currentThread().isInterrupted) {
             try {
                 connect()
-                socksProxy = Socks5Proxy(session!!, config.localPort, onLog)
+                socksProxy = Socks5Proxy(session!!, config.localPort, config.verbose, onLog)
                 socksProxy!!.start()
                 onStateChange(ConnectionState.CONNECTED)
-                onLog("Connected. SOCKS5 proxy on 0.0.0.0:${config.localPort}")
+                onLog("Connected. SOCKS5 proxy on 0.0.0.0:${socksProxy!!.boundPort}")
 
                 while (isRunning && !Thread.currentThread().isInterrupted) {
                     Thread.sleep(config.healthCheckPeriod * 1000L)
@@ -105,8 +105,13 @@ class SshManager(
         sess.setConfig("ServerAliveInterval", "15")
         sess.setConfig("ServerAliveCountMax", "3")
 
-        parseExtraParams(config.extraParams).forEach { (key, value) ->
-            sess.setConfig(key, value)
+        if (config.useCompression) {
+            sess.setConfig("compression.s2c", "zlib@openssh.com,zlib")
+            sess.setConfig("compression.c2s", "zlib@openssh.com,zlib")
+        }
+
+        if (config.verbose) {
+            onLog("Verbose mode enabled (JSch debug-level logging)")
         }
 
         sess.connect(30000)
@@ -122,61 +127,27 @@ class SshManager(
     }
 
     private fun checkHealth(): Boolean {
-        return try {
-            val proxy = java.net.Proxy(
-                java.net.Proxy.Type.SOCKS,
-                InetSocketAddress("127.0.0.1", config.localPort)
-            )
-            val socket = Socket(proxy)
-            socket.connect(InetSocketAddress("1.1.1.1", 53), 5000)
-            socket.close()
-            true
-        } catch (_: Exception) {
-            false
-        }
+        return session?.isConnected == true && socksProxy?.isRunning == true
     }
 
-    private fun parseExtraParams(params: String): Map<String, String> {
-        if (params.isBlank()) return emptyMap()
-        val map = mutableMapOf<String, String>()
-        val parts = params.trim().split("\\s+".toRegex())
-        var i = 0
-        while (i < parts.size) {
-            when (parts[i]) {
-                "-o", "-O" -> {
-                    if (i + 1 < parts.size) {
-                        val kv = parts[i + 1].split("=", limit = 2)
-                        if (kv.size == 2) map[kv[0]] = kv[1]
-                        i += 2
-                    } else i++
-                }
-                "-C" -> {
-                    map["compression.s2c"] = "zlib@openssh.com,zlib"
-                    map["compression.c2s"] = "zlib@openssh.com,zlib"
-                    i++
-                }
-                "-v" -> {
-                    onLog("Verbose mode enabled (JSch debug-level logging)")
-                    i++
-                }
-                else -> i++
-            }
-        }
-        return map
-    }
 }
 
 internal class Socks5Proxy(
     private val session: Session,
     private val localPort: Int,
+    private val verbose: Boolean,
     private val onLog: (String) -> Unit
 ) {
     private var serverSocket: ServerSocket? = null
     private val executor = Executors.newCachedThreadPool()
 
+    val boundPort: Int get() = serverSocket?.localPort ?: -1
+    val isRunning: Boolean get() = serverSocket != null && !serverSocket!!.isClosed
+
     fun start() {
-        serverSocket = ServerSocket().apply { bind(InetSocketAddress("0.0.0.0", localPort)) }
-        onLog("SOCKS5 listening on 0.0.0.0:$localPort")
+        val port = if (localPort in 1..65535) localPort else 1080
+        serverSocket = ServerSocket().apply { bind(InetSocketAddress("0.0.0.0", port)) }
+        onLog("SOCKS5 listening on 0.0.0.0:${serverSocket!!.localPort}")
         executor.submit {
             try {
                 while (!serverSocket!!.isClosed) {
@@ -202,8 +173,18 @@ internal class Socks5Proxy(
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
 
-            input.read()
+            val ver = input.read()
+            if (ver != 5) {
+                if (ver > 0) onLog("SOCKS: unsupported version $ver")
+                socket.close()
+                return
+            }
+
             val nMethods = input.read()
+            if (nMethods < 0) {
+                socket.close()
+                return
+            }
             input.readNBytes(nMethods)
             output.write(byteArrayOf(5, 0))
 
@@ -225,6 +206,10 @@ internal class Socks5Proxy(
                 }
                 3 -> {
                     val len = input.read()
+                    if (len < 0) {
+                        socket.close()
+                        return
+                    }
                     String(input.readNBytes(len)) to readShort(input)
                 }
                 4 -> {
@@ -238,19 +223,82 @@ internal class Socks5Proxy(
                 }
             }
 
-            val channel = session.getStreamForwarder(host, port) as Channel
-            channel.setInputStream(input)
-            channel.connect(30000)
+            if (port !in 1..65535) {
+                output.write(buildSocks5Response(3))
+                socket.close()
+                return
+            }
+            if (addrType == 4) {
+                output.write(buildSocks5Response(8))
+                socket.close()
+                return
+            }
 
+            if (verbose) onLog("SOCKS CONNECT $host:$port")
+
+            val channel = try {
+                session.getStreamForwarder(host, port) as Channel
+            } catch (e: Exception) {
+                onLog("SSH tunnel to $host:$port failed: ${e.message}")
+                output.write(buildSocks5Response(4))
+                socket.close()
+                return
+            }
+            try {
+                channel.connect(30000)
+            } catch (e: Exception) {
+                if (verbose) onLog("Tunnel to $host:$port failed: ${e.message}")
+                if (!socket.isClosed) {
+                    try {
+                        output.write(buildSocks5Response(4))
+                    } catch (_: Exception) {}
+                }
+                socket.close()
+                return
+            }
+
+            if (verbose) onLog("Tunnel established to $host:$port")
             output.write(buildSocks5Response(0))
             output.flush()
 
-            channel.setOutputStream(output)
+            val remoteIn = channel.inputStream
+            val remoteOut = channel.outputStream
 
-            while (channel.isConnected && !socket.isClosed) {
-                Thread.sleep(500)
-            }
-        } catch (_: Exception) {
+            val upload = Thread {
+                try {
+                    val buf = ByteArray(32768)
+                    while (true) {
+                        val len = input.read(buf)
+                        if (len < 0) break
+                        remoteOut.write(buf, 0, len)
+                        remoteOut.flush()
+                    }
+                } catch (_: Exception) {}
+                try { socket.close() } catch (_: Exception) {}
+            }.apply { isDaemon = true; start() }
+
+            val download = Thread {
+                try {
+                    val buf = ByteArray(32768)
+                    while (true) {
+                        val len = remoteIn.read(buf)
+                        if (len < 0) break
+                        output.write(buf, 0, len)
+                        output.flush()
+                    }
+                } catch (_: Exception) {}
+                try { socket.close() } catch (_: Exception) {}
+            }.apply { isDaemon = true; start() }
+
+            upload.join()
+            download.join()
+            channel.disconnect()
+
+            onLog("Tunnel closed for $host:$port")
+        } catch (e: java.net.SocketTimeoutException) {
+            if (verbose) onLog("SOCKS client timeout")
+        } catch (e: Exception) {
+            if (verbose) onLog("SOCKS client error: ${e.javaClass.simpleName}: ${e.message}")
         } finally {
             try {
                 socket.close()

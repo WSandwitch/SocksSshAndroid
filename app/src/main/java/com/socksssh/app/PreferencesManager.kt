@@ -26,7 +26,8 @@ class PreferencesManager(context: Context) {
             .putInt(KEY_SERVER_PORT, config.serverPort)
             .putInt(KEY_LOCAL_PORT, config.localPort)
             .putInt(KEY_HEALTH_PERIOD, config.healthCheckPeriod)
-            .putString(KEY_EXTRA_PARAMS, config.extraParams)
+            .putBoolean(KEY_COMPRESSION, config.useCompression)
+            .putBoolean(KEY_VERBOSE, config.verbose)
             .putString(KEY_LOGIN, config.login)
             .putString(KEY_PASSWORD, config.password)
             .putString(KEY_PRIVATE_KEY, config.privateKey)
@@ -39,7 +40,8 @@ class PreferencesManager(context: Context) {
             serverPort = prefs.getInt(KEY_SERVER_PORT, 22),
             localPort = prefs.getInt(KEY_LOCAL_PORT, 1080),
             healthCheckPeriod = prefs.getInt(KEY_HEALTH_PERIOD, 30),
-            extraParams = prefs.getString(KEY_EXTRA_PARAMS, "") ?: "",
+            useCompression = prefs.getBoolean(KEY_COMPRESSION, false),
+            verbose = prefs.getBoolean(KEY_VERBOSE, false),
             login = prefs.getString(KEY_LOGIN, "") ?: "",
             password = prefs.getString(KEY_PASSWORD, "") ?: "",
             privateKey = prefs.getString(KEY_PRIVATE_KEY, "") ?: ""
@@ -57,6 +59,8 @@ class PreferencesManager(context: Context) {
         private const val KEY_LOCAL_PORT = "local_port"
         private const val KEY_HEALTH_PERIOD = "health_period"
         private const val KEY_EXTRA_PARAMS = "extra_params"
+        private const val KEY_COMPRESSION = "compression"
+        private const val KEY_VERBOSE = "verbose"
         private const val KEY_LOGIN = "login"
         private const val KEY_PASSWORD = "password"
         private const val KEY_PRIVATE_KEY = "private_key"

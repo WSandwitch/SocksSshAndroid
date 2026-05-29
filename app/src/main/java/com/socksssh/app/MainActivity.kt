@@ -14,7 +14,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -96,7 +98,8 @@ fun SocksSshApp(
     prefs: PreferencesManager,
     context: Context
 ) {
-    var config by remember { mutableStateOf(prefs.loadConfig()) }
+    val cfg = remember { mutableStateOf(prefs.loadConfig()) }
+    var config by cfg
 
     val logs by produceState<List<String>>(initialValue = emptyList(), key1 = service) {
         service?.let { s -> s.logs.collect { value = it } }
@@ -109,12 +112,30 @@ fun SocksSshApp(
         service?.let { s -> s.connectionState.collect { value = it } }
     }
 
+    var serverPortText by remember(config.serverPort) {
+        mutableStateOf(config.serverPort.toString())
+    }
+    var localPortText by remember(config.localPort) {
+        mutableStateOf(config.localPort.toString())
+    }
+    var hcPeriodText by remember(config.healthCheckPeriod) {
+        mutableStateOf(config.healthCheckPeriod.toString())
+    }
+
     val logScrollState = rememberScrollState()
 
     LaunchedEffect(logs.size) {
         if (logs.isNotEmpty()) {
             logScrollState.animateScrollTo(logScrollState.maxValue)
         }
+    }
+
+    fun parseAndUpdate() {
+        config = config.copy(
+            serverPort = serverPortText.toIntOrNull() ?: 22,
+            localPort = localPortText.toIntOrNull() ?: 1080,
+            healthCheckPeriod = hcPeriodText.toIntOrNull() ?: 30
+        )
     }
 
     Column(
@@ -150,20 +171,16 @@ fun SocksSshApp(
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
-                value = if (config.serverPort == 0) "" else config.serverPort.toString(),
-                onValueChange = {
-                    config = config.copy(serverPort = it.toIntOrNull() ?: 22)
-                },
+                value = serverPortText,
+                onValueChange = { serverPortText = it },
                 label = { Text("Port") },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
                 enabled = connectionState == ConnectionState.DISCONNECTED
             )
             OutlinedTextField(
-                value = if (config.localPort == 0) "" else config.localPort.toString(),
-                onValueChange = {
-                    config = config.copy(localPort = it.toIntOrNull() ?: 1080)
-                },
+                value = localPortText,
+                onValueChange = { localPortText = it },
                 label = { Text("Local Port") },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
@@ -173,23 +190,37 @@ fun SocksSshApp(
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
-                value = if (config.healthCheckPeriod == 0) "" else config.healthCheckPeriod.toString(),
-                onValueChange = {
-                    config = config.copy(healthCheckPeriod = it.toIntOrNull() ?: 30)
-                },
+                value = hcPeriodText,
+                onValueChange = { hcPeriodText = it },
                 label = { Text("HC Period (s)") },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
                 enabled = connectionState == ConnectionState.DISCONNECTED
             )
-            OutlinedTextField(
-                value = config.extraParams,
-                onValueChange = { config = config.copy(extraParams = it) },
-                label = { Text("Extra SSH params") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-                enabled = connectionState == ConnectionState.DISCONNECTED
-            )
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = config.useCompression,
+                    onCheckedChange = { config = config.copy(useCompression = it) },
+                    enabled = connectionState == ConnectionState.DISCONNECTED
+                )
+                Spacer(Modifier.width(4.dp))
+                Text("Compression", style = MaterialTheme.typography.bodySmall)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = config.verbose,
+                    onCheckedChange = { config = config.copy(verbose = it) },
+                    enabled = connectionState == ConnectionState.DISCONNECTED
+                )
+                Spacer(Modifier.width(4.dp))
+                Text("Verbose logs", style = MaterialTheme.typography.bodySmall)
+            }
         }
 
         OutlinedTextField(
@@ -228,6 +259,7 @@ fun SocksSshApp(
         if (connectionState == ConnectionState.DISCONNECTED) {
             Button(
                 onClick = {
+                    parseAndUpdate()
                     prefs.saveConfig(config)
                     prefs.wasManuallyStopped = false
                     context.startForegroundService(
@@ -273,15 +305,17 @@ fun SocksSshApp(
             color = Color(0xFF1E1E1E),
             shape = MaterialTheme.shapes.small
         ) {
-            Text(
-                text = logs.joinToString("\n"),
-                color = Color(0xFF00FF00),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
-                modifier = Modifier
-                    .padding(8.dp)
-                    .verticalScroll(logScrollState)
-            )
+            SelectionContainer {
+                Text(
+                    text = logs.joinToString("\n"),
+                    color = Color(0xFF00FF00),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .padding(8.dp)
+                        .verticalScroll(logScrollState)
+                )
+            }
         }
     }
 }
